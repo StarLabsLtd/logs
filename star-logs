@@ -1,0 +1,54 @@
+#!/bin/bash 
+clear
+echo '  _____ _             _           _'
+echo ' /  ___| |           | |         | |'
+echo ' \ `--.| |_ __ _ _ __| |     __ _| |__  ___'
+echo '  `--. \ __/ _` | '"'"'__| |    / _` | '"'"'_ \/ __|'
+echo ' /\__/ / || (_| | |  | |___| (_| | |_) \__ \'
+echo ' \____/ \__\__,_|_|  \_____/\__,_|_.__/|___/'
+echo
+echo '***************** Star Logs ****************'
+serial=$(sudo dmidecode -s system-serial-number)
+rm /tmp/star-*.txt
+echo
+echo "Gathering logs for $serial"
+echo
+echo -ne "Getting journalctl..."
+echo 'Done'
+journalctl -r --since "3 days ago" &>/dev/null > /tmp/star-journalctl.txt
+echo -ne "Getting boot log..."
+journalctl -r --list-boots &>/dev/null > /tmp/star-boot.txt
+echo "Done"
+echo -ne "Getting dmesg..."
+dmesg --level=err,warn &>/dev/null > /tmp/star-dmesg.txt
+echo "Done"
+echo -ne "Getting firmware information..."
+fwupdmgr --version &> /dev/null >> /tmp/star-firmware.txt
+fwupdmgr get-devices --show-all-devices &> /dev/null >> /tmp/star-firmware.txt
+sudo dmidecode &>/dev/null >> /tmp/star-firmware.txt
+echo "Done"
+echo -ne "Getting distribution information..."
+lsb_release -a &>/dev/null > /tmp/star-info.txt
+uname -r &>/dev/null >> /tmp/star-info.txt
+echo "Done"
+echo -ne "Getting battery information..."
+upower -i /org/freedesktop/UPower/devices/battery_BAT0 &>/dev/null > /tmp/star-battery.txt
+echo "Done"
+echo -ne "Getting installed programs..."
+apt list --installed &>/dev/null > /tmp/star-installed.txt
+apt list --upgradeable &>/dev/null > /tmp/star-upgradeable.txt
+echo "Done"
+echo -ne "Getting package sources..."
+ls /etc/apt/sources.list.d/ &>/dev/null > /tmp/star-repositories.txt
+for f in /etc/apt/sources.list.d/*.list; do
+	list=$(echo $f | cut -d "/" -f5)
+	echo $f &>/dev/null > /tmp/star-"$list".txt
+	cat $f >> /tmp/star-"$list".txt
+done
+echo "Done"
+echo
+echo -ne "Creating zip archive of the logs..."
+zip -rj ~/Desktop/$serial.zip /tmp/star-*.txt &>/dev/null
+echo "Done"
+echo
+echo "Logs have been saved to ~/Desktop/$serial.zip"

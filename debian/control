@@ -1,0 +1,11 @@
+Source: starlabs-diagnostics
+Section: admin
+Maintainer: Star Labs <admin@starlabs.systems>
+Build-Depends: debhelper (>= 7)
+Standards-Version: 4.1.1
+
+Package: starlabs-diagnostics
+Architecture: all
+Description: Used to gather logs
+
+

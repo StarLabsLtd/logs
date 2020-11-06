@@ -1,0 +1,35 @@
+starlabs-diagnostics (0.0.6) focal; urgency=medium
+
+  * Added repo info
+
+ -- Sean Rhodes <sean@starlabs.systems>  Fri, 17 Apr 2020 08:30:54 +0100
+
+starlabs-diagnostics (0.0.5) eoan; urgency=medium
+
+  * Added additional logs
+
+ -- Sean Rhodes <sean@starlabs.systems>  Wed, 12 Feb 2020 09:48:40 +0000
+
+starlabs-diagnostics (0.0.4) disco; urgency=medium
+
+  * Fixed zip creation
+
+ -- Sean Rhodes <sean@starlabs.systems>  Thu, 30 May 2019 16:14:10 +0100
+
+starlabs-diagnostics (0.0.3) disco; urgency=medium
+
+  * Wrapped serial so it wont fault on Default String
+
+ -- Sean Rhodes <sean@starlabs.systems>  Wed, 29 May 2019 14:38:49 +0100
+
+starlabs-diagnostics (0.0.2) disco; urgency=medium
+
+  * Tidied up script
+
+ -- Sean Rhodes <sean@starlabs.systems>  Wed, 29 May 2019 14:33:59 +0100
+
+starlabs-diagnostics (0.0.1) disco; urgency=medium
+
+  * Initial release
+
+ -- Sean Rhodes <sean@starlabs.systems>  Wed, 29 May 2019 12:40:20 +0100
