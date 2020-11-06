@@ -37,9 +37,7 @@ pacman -Qu &>/dev/null > /tmp/star-upgradeable.txt
 echo "Done"
 echo
 echo -ne "Creating zip archive of the logs..."
-for i in /tmp/star-*.txt; do
-  gzip -c $i > $serial.gz
-done
+tar -zcvf ~/Desktop/$serial.gz /tmp/star-*.txt &>/dev/null
 echo "Done"
 echo
 echo "Logs have been saved to /Desktop/$serial.zip"
