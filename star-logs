@@ -1,14 +1,31 @@
 #!/bin/bash 
+function splash() {
 clear
-echo '  _____ _             _           _'
-echo ' /  ___| |           | |         | |'
-echo ' \ `--.| |_ __ _ _ __| |     __ _| |__  ___'
-echo '  `--. \ __/ _` | '"'"'__| |    / _` | '"'"'_ \/ __|'
-echo ' /\__/ / || (_| | |  | |___| (_| | |_) \__ \'
-echo ' \____/ \__\__,_|_|  \_____/\__,_|_.__/|___/'
-echo
-echo '***************** Star Logs ****************'
-serial=$(sudo dmidecode -s system-serial-number)
+cat << "EOF"
+
+  ___ _            _         _       
+ / __| |_ __ _ _ _| |   __ _| |__ ___
+ \__ |  _/ _` | '_| |__/ _` | '_ (_-<
+ |___/\__\__,_|_| |____\__,_|_.__/__/
+
+EOF
+echo "============================================================================"
+echo "$1"
+echo "============================================================================"
+}
+
+splash "Star Labs Diagnostics"
+
+if [ "$EUID" -ne 0 ];then
+  echo
+  echo "Star-Logs requires root priveldges. Please type in:"
+  echo " "
+  echo "sudo star-logs"
+  echo " "
+  exit
+fi
+apt update
+serial=$(dmidecode -s system-serial-number)
 rm /tmp/star-*.txt
 echo
 echo "Gathering logs for $serial"
@@ -25,7 +42,7 @@ echo "Done"
 echo -ne "Getting firmware information..."
 fwupdmgr --version &> /dev/null >> /tmp/star-firmware.txt
 fwupdmgr get-devices --show-all-devices &> /dev/null >> /tmp/star-firmware.txt
-sudo dmidecode &>/dev/null >> /tmp/star-firmware.txt
+dmidecode &>/dev/null >> /tmp/star-firmware.txt
 echo "Done"
 echo -ne "Getting distribution information..."
 lsb_release -a &>/dev/null > /tmp/star-info.txt
@@ -39,16 +56,28 @@ apt list --installed &>/dev/null > /tmp/star-installed.txt
 apt list --upgradeable &>/dev/null > /tmp/star-upgradeable.txt
 echo "Done"
 echo -ne "Getting package sources..."
-ls /etc/apt/sources.list.d/ &>/dev/null > /tmp/star-repositories.txt
 for f in /etc/apt/sources.list.d/*.list; do
 	list=$(echo $f | cut -d "/" -f5)
-	echo $f &>/dev/null > /tmp/star-"$list".txt
-	cat $f >> /tmp/star-"$list".txt
+	echo $f &>/dev/null >> /tmp/star-repositories.txt
+	cat $f >> /tmp/star-repositories.txt
 done
 echo "Done"
+
+echo -ne "Getting kernel config files..."
+for f in /etc/modprobe.d/*; do
+        list=$(echo $f | cut -d "/" -f5)
+        echo $f &>/dev/null >> /tmp/star-modprobe.txt
+        cat $f >> /tmp/star-modprobe.txt
+done
+echo "Done"
+echo -ne "Getting audio codec..."
+cat /proc/asound/card0/codec#0 > /tmp/star-codec.txt
+echo "Done"
+
 echo
 echo -ne "Creating zip archive of the logs..."
-zip -rj ~/Desktop/$serial.zip /tmp/star-*.txt &>/dev/null
+zip -rj /home/$SUDO_USER/Downloads/$serial.zip /tmp/star-*.txt &> /dev/null
+chown $SUDO_USER:$SUDO_USER /home/$SUDO_USER/Downloads/$serial.zip
 echo "Done"
 echo
-echo "Logs have been saved to ~/Desktop/$serial.zip"
+echo "Logs have been saved to ~/Downloads/$serial.zip"

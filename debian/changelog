@@ -1,3 +1,21 @@
+starlabs-diagnostics (3) focal; urgency=medium
+
+  * Added an apt update
+
+ -- Sean Rhodes <sean@starlabs.systems>  Fri, 15 Jan 2021 16:59:44 +0000
+
+starlabs-diagnostics (2) focal; urgency=medium
+
+  * Added additional logs
+
+ -- Sean Rhodes <sean@starlabs.systems>  Thu, 10 Dec 2020 09:08:52 +0000
+
+starlabs-diagnostics (1) focal; urgency=medium
+
+  * Changed output directory to Downloads due to eOS
+
+ -- Sean Rhodes <sean@starlabs.systems>  Mon, 07 Dec 2020 11:32:36 +0000
+
 starlabs-diagnostics (0.0.6) focal; urgency=medium
 
   * Added repo info
