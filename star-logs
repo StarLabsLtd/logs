@@ -1,12 +1,14 @@
-#!/bin/bash 
+#!/bin/bash
 function splash() {
 clear
 cat << "EOF"
 
-  ___ _            _         _       
- / __| |_ __ _ _ _| |   __ _| |__ ___
- \__ |  _/ _` | '_| |__/ _` | '_ (_-<
- |___/\__\__,_|_| |____\__,_|_.__/__/
+███████╗████████╗ █████╗ ██████╗ ██╗      █████╗ ██████╗ ███████╗
+██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██║     ██╔══██╗██╔══██╗██╔════╝
+███████╗   ██║   ███████║██████╔╝██║     ███████║██████╔╝███████╗
+╚════██║   ██║   ██╔══██║██╔══██╗██║     ██╔══██║██╔══██╗╚════██║
+███████║   ██║   ██║  ██║██║  ██║███████╗██║  ██║██████╔╝███████║
+╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝
 
 EOF
 echo "============================================================================"
@@ -24,7 +26,56 @@ if [ "$EUID" -ne 0 ];then
   echo " "
   exit
 fi
-apt update
+
+function updateFirmware() {
+  fwupdmgr refresh
+  fwupdmgr update --force -y
+}
+
+
+# Check if firmware is coreboot
+if [[ $(cat /sys/class/dmi/id/bios_vendor) == "coreboot" ]]; then
+  coreboot=true;
+fi
+
+sku=$(cat /sys/class/dmi/id/product_sku)
+model=${sku:0:2}
+
+while true; do
+  state=$(upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep state: | sed 's/ //g' | cut -d ':' -f2)
+  percent=$(upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep percentage: | sed 's/ //g' | cut -d ':' -f2 | sed s/%//)
+  if [[ $percent > 30 ]] && [[ $state == 'charging' ]] || [[ $state == 'fully-charged' ]]; then
+    break
+  else
+    echo "Please connect the charger and wait until the battery is charged to 30%."
+    sleep 3
+    clear
+  fi
+done
+
+# Check software is up to date
+if [[ $(apt update | grep 'can be upgraded') ]]; then
+  printf "Your software is not up to date. Updating the software may
+          resolve the issue you are experiencing. Would you like to
+          update your software now?\n\n"
+  read -p "Please enter [Y] or [N]"
+  echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    apt full-upgrade -y
+  fi
+fi
+
+if [[ ! $(fwupdmgr get-updates 2>&1 | grep 'No updates') ]]; then
+  printf "Your firmware is not up to date. Updating the firmware may\n
+	  resolve the issue you are experiencing. Would you like to \n
+	  update your firmware now?\n\n"
+  read -p "Please enter [Y] or [N]"
+  echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    updateFirmware
+  fi
+fi
+
 serial=$(dmidecode -s system-serial-number)
 rm /tmp/star-*.txt
 echo
@@ -62,6 +113,10 @@ for f in /etc/apt/sources.list.d/*.list; do
 	cat $f >> /tmp/star-repositories.txt
 done
 echo "Done"
+echo -ne "Getting fwupd information..."
+fwupdmgr get-releases --show-all --verbose >> /tmp/star-fwupd.txt
+fwupdmgr get-devices --show-all --verbose >> /tmp/star-fwupd.txt
+echo "Done"
 
 echo -ne "Getting kernel config files..."
 for f in /etc/modprobe.d/*; do
@@ -73,6 +128,11 @@ echo "Done"
 echo -ne "Getting audio codec..."
 cat /proc/asound/card0/codec#0 > /tmp/star-codec.txt
 echo "Done"
+if command -v snap &> /dev/null; then
+  echo -ne "Getting list of installed snaps..."
+  snap list > /tmp/star-snap.txt
+  echo "Done"
+fi
 
 echo
 echo -ne "Creating zip archive of the logs..."

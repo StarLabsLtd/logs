@@ -1,3 +1,9 @@
+starlabs-diagnostics (4) hirsute; urgency=medium
+
+  * Update to include fwupd info
+
+ -- Sean Rhodes <sean@starlabs.systems>  Mon, 06 Sep 2021 22:44:40 +0100
+
 starlabs-diagnostics (3) focal; urgency=medium
 
   * Added an apt update
