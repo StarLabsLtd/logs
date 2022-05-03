@@ -1,143 +1,125 @@
 #!/bin/bash
 function splash() {
-clear
+action="$1"
+# clear
 cat << "EOF"
 
-███████╗████████╗ █████╗ ██████╗ ██╗      █████╗ ██████╗ ███████╗
-██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██║     ██╔══██╗██╔══██╗██╔════╝
-███████╗   ██║   ███████║██████╔╝██║     ███████║██████╔╝███████╗
-╚════██║   ██║   ██╔══██║██╔══██╗██║     ██╔══██║██╔══██╗╚════██║
-███████║   ██║   ██║  ██║██║  ██║███████╗██║  ██║██████╔╝███████║
-╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝
-
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                                                                             ║
+║                    ██╗      ██████╗  ██████╗ ███████╗                       ║
+║                    ██║     ██╔═══██╗██╔════╝ ██╔════╝                       ║
+║                    ██║     ██║   ██║██║  ███╗███████╗                       ║
+║                    ██║     ██║   ██║██║   ██║╚════██║                       ║
+║                    ███████╗╚██████╔╝╚██████╔╝███████║                       ║
+║                    ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝                       ║
+╚═════════════════════════════════════════════════════════════════════════════╝
 EOF
-echo "============================================================================"
-echo "$1"
-echo "============================================================================"
+printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
+printf "%-79s %s\n" "║ Gathering logs: $(cat /sys/class/dmi/id/product_name)" "║ "
+printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
 }
 
 splash "Star Labs Diagnostics"
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+normal=$(tput sgr0)
 
 if [ "$EUID" -ne 0 ];then
-  echo
-  echo "Star-Logs requires root priveldges. Please type in:"
-  echo " "
-  echo "sudo star-logs"
-  echo " "
-  exit
+	printf "\nStar-Logs requires root priveldges. Please type in:\n\n"
+	printf "%s\n\n" "${green}sudo star-logs"
+	exit
 fi
-
-function updateFirmware() {
-  fwupdmgr refresh
-  fwupdmgr update --force -y
-}
-
-
-# Check if firmware is coreboot
-if [[ $(cat /sys/class/dmi/id/bios_vendor) == "coreboot" ]]; then
-  coreboot=true;
-fi
-
-sku=$(cat /sys/class/dmi/id/product_sku)
-model=${sku:0:2}
-
-while true; do
-  state=$(upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep state: | sed 's/ //g' | cut -d ':' -f2)
-  percent=$(upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep percentage: | sed 's/ //g' | cut -d ':' -f2 | sed s/%//)
-  if [[ $percent > 30 ]] && [[ $state == 'charging' ]] || [[ $state == 'fully-charged' ]]; then
-    break
-  else
-    echo "Please connect the charger and wait until the battery is charged to 30%."
-    sleep 3
-    clear
-  fi
-done
 
 # Check software is up to date
-if [[ $(apt update | grep 'can be upgraded') ]]; then
-  printf "Your software is not up to date. Updating the software may
-          resolve the issue you are experiencing. Would you like to
-          update your software now?\n\n"
-  read -p "Please enter [Y] or [N]"
-  echo
-  if [[ $REPLY =~ ^[Yy]$ ]]; then
-    apt full-upgrade -y
-  fi
+if apt update &> /dev/null | grep -q 'can be upgraded'; then
+printf "Your software is not up to date. Updating the software may
+resolve the issue you are experiencing. Would you like to
+update your software now?\n\n"
 fi
 
-if [[ ! $(fwupdmgr get-updates 2>&1 | grep 'No updates') ]]; then
-  printf "Your firmware is not up to date. Updating the firmware may\n
-	  resolve the issue you are experiencing. Would you like to \n
-	  update your firmware now?\n\n"
-  read -p "Please enter [Y] or [N]"
-  echo
-  if [[ $REPLY =~ ^[Yy]$ ]]; then
-    updateFirmware
-  fi
+if ! fwupdmgr get-updates 2>&1 | grep -q 'No updates'; then
+printf \
+"Your firmware is not up to date. Updating the firmware may\n\
+resolve the issue you are experiencing.\n\n\
+Please see the below guide on how to update your firmware.\n\n\
+https://support.starlabs.systems/kb/updates/installing-updates-from-the-lvfs\n"
 fi
 
-serial=$(dmidecode -s system-serial-number)
-rm /tmp/star-*.txt
-echo
-echo "Gathering logs for $serial"
-echo
-echo -ne "Getting journalctl..."
-echo 'Done'
-journalctl -r --since "3 days ago" &>/dev/null > /tmp/star-journalctl.txt
-echo -ne "Getting boot log..."
-journalctl -r --list-boots &>/dev/null > /tmp/star-boot.txt
-echo "Done"
-echo -ne "Getting dmesg..."
-dmesg --level=err,warn &>/dev/null > /tmp/star-dmesg.txt
-echo "Done"
-echo -ne "Getting firmware information..."
-fwupdmgr --version &> /dev/null >> /tmp/star-firmware.txt
-fwupdmgr get-devices --show-all-devices &> /dev/null >> /tmp/star-firmware.txt
-dmidecode &>/dev/null >> /tmp/star-firmware.txt
-echo "Done"
-echo -ne "Getting distribution information..."
-lsb_release -a &>/dev/null > /tmp/star-info.txt
-uname -r &>/dev/null >> /tmp/star-info.txt
-echo "Done"
-echo -ne "Getting battery information..."
-upower -i /org/freedesktop/UPower/devices/battery_BAT0 &>/dev/null > /tmp/star-battery.txt
-echo "Done"
-echo -ne "Getting installed programs..."
-apt list --installed &>/dev/null > /tmp/star-installed.txt
-apt list --upgradeable &>/dev/null > /tmp/star-upgradeable.txt
-echo "Done"
-echo -ne "Getting package sources..."
+log_dir="/tmp/$(cat /sys/class/dmi/id/product_name)_$(date '+%Y-%m-%d_%H-%M-%S')"
+
+mkdir -p "$log_dir"
+
+printf "%-35s %s" "${normal}Journalctl:"
+journalctl -r --since "3 days ago"				&> "$log_dir/journalctl.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Boot log:"
+journalctl -r --list-boots					&> "$log_dir/boot.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Dmesg:"
+dmesg								&> "$log_dir/dmesg.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Firmware information:"
+fwupdmgr --version						&> "$log_dir/fwupd.txt"
+fwupdmgr get-devices --show-all-devices --verbose		&> "$log_dir/fwupd-devices.txt"
+fwupdtool get-devices --plugins flashrom --verbose		&> "$log_dir/fwupd-flashrom.txt"
+fwupdmgr security --force					&> "$log_dir/fwupd-security.txt"
+dmidecode							&> "$log_dir/dmi.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Distribution information:"
+lsb_release -a							&> "$log_dir/distro.txt"
+uname -r							&> "$log_dir/kernel.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Battery information:"
+upower -i /org/freedesktop/UPower/devices/battery_BAT0		&> "$log_dir/battery.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Installed programs:"
+apt list --installed						&> "$log_dir/installed.txt"
+apt list --upgradeable						&> "$log_dir/upgradeable.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Package sources:"
+mkdir -p "$log_dir/repo"
 for f in /etc/apt/sources.list.d/*.list; do
-	list=$(echo $f | cut -d "/" -f5)
-	echo $f &>/dev/null >> /tmp/star-repositories.txt
-	cat $f >> /tmp/star-repositories.txt
+	cat "$f"						&> "$log_dir/repo/$(echo $f | cut -d '/' -f5)"
 done
-echo "Done"
-echo -ne "Getting fwupd information..."
-fwupdmgr get-releases --show-all --verbose >> /tmp/star-fwupd.txt
-fwupdmgr get-devices --show-all --verbose >> /tmp/star-fwupd.txt
-echo "Done"
+printf "%s\n" "${green}✔"
 
-echo -ne "Getting kernel config files..."
+printf "%-35s %s" "${normal}Kernel config:"
+mkdir "$log_dir/modprobe"
 for f in /etc/modprobe.d/*; do
-        list=$(echo $f | cut -d "/" -f5)
-        echo $f &>/dev/null >> /tmp/star-modprobe.txt
-        cat $f >> /tmp/star-modprobe.txt
+        cat "$f"						&> "$log_dir/modprobe/$(echo $f | cut -d '/' -f4)"
 done
-echo "Done"
-echo -ne "Getting audio codec..."
-cat /proc/asound/card0/codec#0 > /tmp/star-codec.txt
-echo "Done"
-if command -v snap &> /dev/null; then
-  echo -ne "Getting list of installed snaps..."
-  snap list > /tmp/star-snap.txt
-  echo "Done"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}PCI devices:"
+lspci -vvvnnnxxx						&> "$log_dir/pci.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Getting audio codec:"
+cat /proc/asound/card0/codec#0					&> "$log_dir/codec.txt"
+printf "%s\n" "${green}✔"
+
+if [[ $(cat /sys/class/dmi/id/bios_vendor) == "coreboot" ]]; then
+	printf "%-35s %s" "${normal}NVRAM:"
+	nvramtool -a						&> "$log_dir/nvram.txt"
+	printf "%s\n" "${green}✔"
 fi
 
-echo
-echo -ne "Creating zip archive of the logs..."
-zip -rj /home/$SUDO_USER/Downloads/$serial.zip /tmp/star-*.txt &> /dev/null
-chown $SUDO_USER:$SUDO_USER /home/$SUDO_USER/Downloads/$serial.zip
-echo "Done"
-echo
-echo "Logs have been saved to ~/Downloads/$serial.zip"
+if command -v snap &> /dev/null; then
+	printf "%-35s %s" "${normal}Installed snaps:"
+	snap list						&> "$log_dir/snap.txt"
+	printf "%s\n" "${green}✔"
+fi
+
+pushd "$log_dir" > /dev/null || exit
+zip -r "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip" . 2&>1 /dev/null
+popd > /dev/null || exit
+
+chown "$SUDO_USER:$SUDO_USER" "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip"
+printf "\n${normal}Logs have been saved to ${green}~/Downloads/$(echo $log_dir | cut -d '/' -f3).zip\n"

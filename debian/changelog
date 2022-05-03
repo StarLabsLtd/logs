@@ -1,3 +1,9 @@
+starlabs-diagnostics (5+j) jammy; urgency=medium
+
+  * Capture more logs
+
+ -- Sean Rhodes <sean@starlabs.systems>  Tue, 03 May 2022 11:40:08 +0100
+
 starlabs-diagnostics (4) hirsute; urgency=medium
 
   * Update to include fwupd info
