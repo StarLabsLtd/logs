@@ -118,7 +118,7 @@ if command -v snap &> /dev/null; then
 fi
 
 pushd "$log_dir" > /dev/null || exit
-zip -r "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip" . 2&>1 /dev/null
+zip -r "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip" . 2&> /dev/null
 popd > /dev/null || exit
 
 chown "$SUDO_USER:$SUDO_USER" "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip"
