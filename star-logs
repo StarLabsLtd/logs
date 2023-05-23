@@ -42,7 +42,7 @@ printf \
 "Your firmware is not up to date. Updating the firmware may\n\
 resolve the issue you are experiencing.\n\n\
 Please see the below guide on how to update your firmware.\n\n\
-https://support.starlabs.systems/kb/updates/installing-updates-from-the-lvfs\n"
+https://starlabsltd.github.io/firmware/methods\n"
 fi
 
 log_dir="/tmp/$(cat /sys/class/dmi/id/product_name)_$(date '+%Y-%m-%d_%H-%M-%S')"
