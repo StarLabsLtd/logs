@@ -1,0 +1,128 @@
+#!/bin/bash
+function splash() {
+action="$1"
+# clear
+cat << "EOF"
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                                                                             ║
+║                    ██╗      ██████╗  ██████╗ ███████╗                       ║
+║                    ██║     ██╔═══██╗██╔════╝ ██╔════╝                       ║
+║                    ██║     ██║   ██║██║  ███╗███████╗                       ║
+║                    ██║     ██║   ██║██║   ██║╚════██║                       ║
+║                    ███████╗╚██████╔╝╚██████╔╝███████║                       ║
+║                    ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝                       ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+EOF
+printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
+printf "%-79s %s\n" "║ Gathering logs: $(cat /sys/class/dmi/id/product_name)" "║ "
+printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
+}
+
+splash "Star Labs Diagnostics"
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+normal=$(tput sgr0)
+
+if [ "$EUID" -ne 0 ];then
+	printf "\nStar-Logs requires root priveldges. Please type in:\n\n"
+	printf "%s\n\n" "${green}sudo star-logs"
+	exit
+fi
+
+# Check software is up to date
+if ! [[ "$(zypper list-updates | grep 'No updates found')" ]]; then
+printf "Your software is not up to date. Updating the software may
+resolve the issue you are experiencing. Would you like to
+update your software now?\n\n"
+fi
+
+if ! fwupdmgr get-updates 2>&1 | grep -q 'No updates'; then
+printf \
+"Your firmware is not up to date. Updating the firmware may\n\
+resolve the issue you are experiencing.\n\n\
+Please see the below guide on how to update your firmware.\n\n\
+https://starlabsltd.github.io/firmware/methods\n"
+fi
+
+log_dir="/tmp/$(cat /sys/class/dmi/id/product_name)_$(date '+%Y-%m-%d_%H-%M-%S')"
+
+mkdir -p "$log_dir"
+
+printf "%-35s %s" "${normal}Journalctl:"
+journalctl -r --since "3 days ago"				&> "$log_dir/journalctl.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Boot log:"
+journalctl -r --list-boots					&> "$log_dir/boot.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Dmesg:"
+dmesg								&> "$log_dir/dmesg.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Firmware information:"
+fwupdmgr --version						&> "$log_dir/fwupd.txt"
+fwupdmgr get-devices --show-all-devices --verbose		&> "$log_dir/fwupd-devices.txt"
+fwupdtool get-devices --plugins flashrom --verbose		&> "$log_dir/fwupd-flashrom.txt"
+fwupdmgr security --force					&> "$log_dir/fwupd-security.txt"
+dmidecode							&> "$log_dir/dmi.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Distribution information:"
+cat /etc/os-release							&> "$log_dir/distro.txt"
+uname -r							&> "$log_dir/kernel.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Battery information:"
+upower -i /org/freedesktop/UPower/devices/battery_BAT0		&> "$log_dir/battery.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Installed programs:"
+zypper search -i						&> "$log_dir/installed.txt"
+zypper list-updates						&> "$log_dir/upgradeable.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Package sources:"
+mkdir -p "$log_dir/repo"
+for f in /etc/zypp/repos.d/*.repo; do
+	cat "$f"						&> "$log_dir/repo/$(echo $f | cut -d '/' -f5)"
+done
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Kernel config:"
+mkdir "$log_dir/modprobe"
+for f in /etc/modprobe.d/*; do
+        cat "$f"						&> "$log_dir/modprobe/$(echo $f | cut -d '/' -f4)"
+done
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}PCI devices:"
+lspci -vvvnnnxxx						&> "$log_dir/pci.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Getting audio codec:"
+cat /proc/asound/card0/codec#0					&> "$log_dir/codec.txt"
+printf "%s\n" "${green}✔"
+
+if [[ $(cat /sys/class/dmi/id/bios_vendor) == "coreboot" ]]; then
+	if ! [ -x "$(command -v nvramtool)" ]; then
+		zypper -n install coreboot-utils
+	fi
+	printf "%-35s %s" "${normal}NVRAM:"
+	nvramtool -a						&> "$log_dir/nvram.txt"
+	printf "%s\n" "${green}✔"
+fi
+
+if command -v snap &> /dev/null; then
+	printf "%-35s %s" "${normal}Installed snaps:"
+	snap list						&> "$log_dir/snap.txt"
+	printf "%s\n" "${green}✔"
+fi
+
+pushd "$log_dir" > /dev/null || exit
+zip -r "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip" . 2&> /dev/null
+popd > /dev/null || exit
+
+chown "$SUDO_USER:$SUDO_USER" "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip"
+printf "\n${normal}Logs have been saved to ${green}~/Downloads/$(echo $log_dir | cut -d '/' -f3).zip\n"
