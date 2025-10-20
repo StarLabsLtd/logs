@@ -1,8 +1,8 @@
 #!/bin/bash
+
 function splash() {
-action="$1"
-# clear
-cat << "EOF"
+    local system_name="$1"
+    cat <<'BANNER'
 
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                                                                             ║
@@ -13,113 +13,176 @@ cat << "EOF"
 ║                    ███████╗╚██████╔╝╚██████╔╝███████║                       ║
 ║                    ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝                       ║
 ╚═════════════════════════════════════════════════════════════════════════════╝
-EOF
-printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
-printf "%-79s %s\n" "║ Gathering logs: $(cat /sys/class/dmi/id/product_name)" "║ "
-printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
+BANNER
+    printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
+    printf "%-79s %s\n" "║ Gathering logs: ${system_name}" "║ "
+    printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
 }
 
-splash "Star Labs Diagnostics"
-red=$(tput setaf 1)
-green=$(tput setaf 2)
-normal=$(tput sgr0)
+product_name=$(< /sys/class/dmi/id/product_name)
+bios_vendor=$(< /sys/class/dmi/id/bios_vendor)
 
-if [ "$EUID" -ne 0 ];then
-	printf "\nStar-Logs requires root priveldges. Please type in:\n\n"
-	printf "%s\n\n" "${green}sudo star-logs"
-	exit
+splash "$product_name"
+
+if command -v tput &> /dev/null && [ -n "${TERM:-}" ]; then
+    red=$(tput setaf 1)
+    green=$(tput setaf 2)
+    normal=$(tput sgr0)
+else
+    red=""
+    green=""
+    normal=""
 fi
 
-# Check software is up to date
-if apt update &> /dev/null | grep -q 'can be upgraded'; then
-printf "Your software is not up to date. Updating the software may
-resolve the issue you are experiencing. Would you like to
-update your software now?\n\n"
+success_mark="✔"
+failure_mark="✖"
+
+run_and_log() {
+    local label="$1"
+    local outfile="$2"
+    shift 2
+
+    printf "%-35s %s" "${normal}${label}:" ""
+    if "$@" &> "$outfile"; then
+        printf "%s\n" "${green}${success_mark}${normal}"
+        return 0
+    else
+        printf "%s\n" "${red}${failure_mark}${normal}"
+        printf "%s\n" "${red}  ↳ See ${outfile} for details${normal}"
+        return 1
+    fi
+}
+
+if [ "$EUID" -ne 0 ]; then
+    printf "\nStar-Logs requires root privileges. Please run with sudo.\n\n"
+    exit 1
 fi
 
-if ! fwupdmgr get-updates 2>&1 | grep -q 'No updates'; then
-printf \
-"Your firmware is not up to date. Updating the firmware may\n\
-resolve the issue you are experiencing.\n\n\
-Please see the below guide on how to update your firmware.\n\n\
-https://support.starlabs.systems/kb/firmware/getting-started\n"
+output_user=${SUDO_USER:-$USER}
+user_home=$(eval echo "~${output_user}")
+if [ "$user_home" = "~${output_user}" ]; then
+    user_home="/home/${output_user}"
+fi
+downloads_dir="${user_home}/Downloads"
+
+if command -v fwupdmgr &> /dev/null; then
+    if ! fwupdmgr get-updates 2>&1 | grep -q 'No updates'; then
+        printf "Your firmware is not up to date. Updating the firmware may\n"
+        printf "resolve the issue you are experiencing.\n\n"
+        printf "Please see the below guide on how to update your firmware.\n\n"
+        printf "https://support.starlabs.systems/kb/firmware/getting-started\n\n"
+    fi
+else
+    printf "%sSkipping firmware update check; fwupdmgr not installed.%s\n\n" "$red" "$normal"
 fi
 
-log_dir="/tmp/$(cat /sys/class/dmi/id/product_name)_$(date '+%Y-%m-%d_%H-%M-%S')"
-
+log_dir="/tmp/${product_name}_$(date '+%Y-%m-%d_%H-%M-%S')"
 mkdir -p "$log_dir"
+zip_log="$log_dir/zip.log"
 
-printf "%-35s %s" "${normal}Journalctl:"
-journalctl -r --since "3 days ago"				&> "$log_dir/journalctl.txt"
-printf "%s\n" "${green}✔"
+shopt -s nullglob
 
-printf "%-35s %s" "${normal}Boot log:"
-journalctl -r --list-boots					&> "$log_dir/boot.txt"
-printf "%s\n" "${green}✔"
+run_and_log "Journalctl" "$log_dir/journalctl.txt" journalctl -r --since "3 days ago"
+run_and_log "Boot log" "$log_dir/boot.txt" journalctl -r --list-boots
+run_and_log "Dmesg" "$log_dir/dmesg.txt" dmesg
 
-printf "%-35s %s" "${normal}Dmesg:"
-dmesg								&> "$log_dir/dmesg.txt"
-printf "%s\n" "${green}✔"
+if command -v fwupdmgr &> /dev/null; then
+    run_and_log "fwupd version" "$log_dir/fwupd.txt" fwupdmgr --version
+    run_and_log "fwupd devices" "$log_dir/fwupd-devices.txt" fwupdmgr get-devices --show-all-devices --verbose
+    if command -v fwupdtool &> /dev/null; then
+        run_and_log "fwupd flashrom devices" "$log_dir/fwupd-flashrom.txt" fwupdtool get-devices --plugins flashrom --verbose
+    fi
+    run_and_log "fwupd security" "$log_dir/fwupd-security.txt" fwupdmgr security --force
+fi
 
-printf "%-35s %s" "${normal}Firmware information:"
-fwupdmgr --version						&> "$log_dir/fwupd.txt"
-fwupdmgr get-devices --show-all-devices --verbose		&> "$log_dir/fwupd-devices.txt"
-fwupdtool get-devices --plugins flashrom --verbose		&> "$log_dir/fwupd-flashrom.txt"
-fwupdmgr security --force					&> "$log_dir/fwupd-security.txt"
-dmidecode							&> "$log_dir/dmi.txt"
-printf "%s\n" "${green}✔"
+run_and_log "DMI decode" "$log_dir/dmi.txt" dmidecode
+run_and_log "Distribution information" "$log_dir/distro.txt" lsb_release -a
+run_and_log "Kernel version" "$log_dir/kernel.txt" uname -r
+run_and_log "Battery information" "$log_dir/battery.txt" upower -i /org/freedesktop/UPower/devices/battery_BAT0
+run_and_log "Installed programs" "$log_dir/installed.txt" apt list --installed
+run_and_log "Upgradeable programs" "$log_dir/upgradeable.txt" apt list --upgradeable
 
-printf "%-35s %s" "${normal}Distribution information:"
-lsb_release -a							&> "$log_dir/distro.txt"
-uname -r							&> "$log_dir/kernel.txt"
-printf "%s\n" "${green}✔"
+printf "%-35s %s" "${normal}Package sources:" ""
+repo_status=0
+repo_dir="$log_dir/repo"
+mkdir -p "$repo_dir"
+repo_files=(/etc/apt/sources.list.d/*.list)
+if ((${#repo_files[@]})); then
+    for f in "${repo_files[@]}"; do
+        if ! cat "$f" &> "$repo_dir/$(basename "$f")"; then
+            repo_status=1
+        fi
+    done
+else
+    if [ -f /etc/apt/sources.list ]; then
+        cat /etc/apt/sources.list &> "$repo_dir/sources.list" || repo_status=1
+    else
+        repo_status=1
+    fi
+fi
+if [ $repo_status -eq 0 ]; then
+    printf "%s\n" "${green}${success_mark}${normal}"
+else
+    printf "%s\n" "${red}${failure_mark}${normal}"
+    printf "%s\n" "${red}  ↳ Unable to copy APT sources${normal}"
+fi
 
-printf "%-35s %s" "${normal}Battery information:"
-upower -i /org/freedesktop/UPower/devices/battery_BAT0		&> "$log_dir/battery.txt"
-printf "%s\n" "${green}✔"
-
-printf "%-35s %s" "${normal}Installed programs:"
-apt list --installed						&> "$log_dir/installed.txt"
-apt list --upgradeable						&> "$log_dir/upgradeable.txt"
-printf "%s\n" "${green}✔"
-
-printf "%-35s %s" "${normal}Package sources:"
-mkdir -p "$log_dir/repo"
-for f in /etc/apt/sources.list.d/*.list; do
-	cat "$f"						&> "$log_dir/repo/$(echo $f | cut -d '/' -f5)"
-done
-printf "%s\n" "${green}✔"
-
-printf "%-35s %s" "${normal}Kernel config:"
-mkdir "$log_dir/modprobe"
+printf "%-35s %s" "${normal}Kernel config:" ""
+modprobe_status=0
+modprobe_dir="$log_dir/modprobe"
+mkdir -p "$modprobe_dir"
 for f in /etc/modprobe.d/*; do
-        cat "$f"						&> "$log_dir/modprobe/$(echo $f | cut -d '/' -f4)"
+    [[ -f "$f" ]] || continue
+    if ! cat "$f" &> "$modprobe_dir/$(basename "$f")"; then
+        modprobe_status=1
+    fi
 done
-printf "%s\n" "${green}✔"
+if [ $modprobe_status -eq 0 ]; then
+    printf "%s\n" "${green}${success_mark}${normal}"
+else
+    printf "%s\n" "${red}${failure_mark}${normal}"
+    printf "%s\n" "${red}  ↳ Unable to copy /etc/modprobe.d files${normal}"
+fi
 
-printf "%-35s %s" "${normal}PCI devices:"
-lspci -vvvnnnxxx						&> "$log_dir/pci.txt"
-printf "%s\n" "${green}✔"
+run_and_log "PCI devices" "$log_dir/pci.txt" lspci -vvvnnnxxx
+run_and_log "Audio codec" "$log_dir/codec.txt" cat /proc/asound/card0/codec#0
 
-printf "%-35s %s" "${normal}Getting audio codec:"
-cat /proc/asound/card0/codec#0					&> "$log_dir/codec.txt"
-printf "%s\n" "${green}✔"
-
-if [[ $(cat /sys/class/dmi/id/bios_vendor) == "coreboot" ]]; then
-	printf "%-35s %s" "${normal}NVRAM:"
-	nvramtool -a						&> "$log_dir/nvram.txt"
-	printf "%s\n" "${green}✔"
+if [[ "$bios_vendor" == "coreboot" ]]; then
+    run_and_log "NVRAM" "$log_dir/nvram.txt" nvramtool -a
 fi
 
 if command -v snap &> /dev/null; then
-	printf "%-35s %s" "${normal}Installed snaps:"
-	snap list						&> "$log_dir/snap.txt"
-	printf "%s\n" "${green}✔"
+    run_and_log "Installed snaps" "$log_dir/snap.txt" snap list
 fi
 
-pushd "$log_dir" > /dev/null || exit
-zip -r "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip" . 2&> /dev/null
-popd > /dev/null || exit
+archive_basename=$(basename "$log_dir")
+archive_path="${downloads_dir}/${archive_basename}.zip"
 
-chown "$SUDO_USER:$SUDO_USER" "/home/$SUDO_USER/Downloads/$(echo $log_dir | cut -d '/' -f3).zip"
-printf "\n${normal}Logs have been saved to ${green}~/Downloads/$(echo $log_dir | cut -d '/' -f3).zip\n"
+if ! command -v zip &> /dev/null; then
+    printf "%szip command not found. Logs remain in %s.%s\n" "$red" "$log_dir" "$normal"
+    exit 0
+fi
+
+if [ ! -d "$downloads_dir" ]; then
+    if ! mkdir -p "$downloads_dir"; then
+        printf "%sUnable to create %s. Logs remain in %s.%s\n" "$red" "$downloads_dir" "$log_dir" "$normal"
+        exit 1
+    fi
+fi
+
+archive_status=0
+if pushd "$log_dir" > /dev/null; then
+    if ! zip -r "$archive_path" . &> "$zip_log"; then
+        archive_status=1
+    fi
+    popd > /dev/null
+else
+    archive_status=1
+fi
+
+if [ $archive_status -eq 0 ]; then
+    chown "$output_user:$output_user" "$archive_path" 2> /dev/null || true
+    printf "\n${normal}Logs have been saved to ${green}~/Downloads/${archive_basename}.zip${normal}\n"
+else
+    printf "%sFailed to create archive. See %s for details. Logs remain in %s.%s\n" "$red" "$zip_log" "$log_dir" "$normal"
+fi
