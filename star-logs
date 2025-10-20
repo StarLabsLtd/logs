@@ -37,6 +37,108 @@ fi
 success_mark="✔"
 failure_mark="✖"
 
+detect_pkg_manager() {
+    if command -v apt &> /dev/null; then
+        echo "apt"
+    elif command -v pacman &> /dev/null; then
+        echo "pacman"
+    elif command -v zypper &> /dev/null; then
+        echo "zypper"
+    else
+        echo "unknown"
+    fi
+}
+
+pkg_manager=$(detect_pkg_manager)
+
+collect_package_information() {
+    case "$pkg_manager" in
+        apt)
+            run_and_log "Installed programs" "$log_dir/installed.txt" apt list --installed
+            run_and_log "Upgradeable programs" "$log_dir/upgradeable.txt" apt list --upgradeable
+            ;;
+        pacman)
+            run_and_log "Installed programs" "$log_dir/installed.txt" pacman -Qe
+            run_and_log "Upgradeable programs" "$log_dir/upgradeable.txt" pacman -Qu
+            ;;
+        zypper)
+            run_and_log "Installed programs" "$log_dir/installed.txt" zypper search -i
+            run_and_log "Upgradeable programs" "$log_dir/upgradeable.txt" zypper list-updates
+            ;;
+        *)
+            printf "%-35s %s" "${normal}Installed programs:" ""
+            printf "%s\n" "${red}${failure_mark}${normal}"
+            printf "%s\n" "${red}  ↳ Unsupported package manager${normal}"
+            printf "Unsupported package manager: unable to list installed programs\n" > "$log_dir/installed.txt"
+
+            printf "%-35s %s" "${normal}Upgradeable programs:" ""
+            printf "%s\n" "${red}${failure_mark}${normal}"
+            printf "%s\n" "${red}  ↳ Unsupported package manager${normal}"
+            printf "Unsupported package manager: unable to list upgradeable programs\n" > "$log_dir/upgradeable.txt"
+            ;;
+    esac
+}
+
+copy_package_sources() {
+    local status=0
+    local repo_dir="$log_dir/repo"
+    mkdir -p "$repo_dir" || return 1
+
+    case "$pkg_manager" in
+        apt)
+            local repo_files=(/etc/apt/sources.list.d/*.list)
+            local copied=0
+            if [ -f /etc/apt/sources.list ]; then
+                copied=1
+                cat /etc/apt/sources.list &> "$repo_dir/sources.list" || status=1
+            fi
+            if ((${#repo_files[@]})); then
+                for f in "${repo_files[@]}"; do
+                    copied=1
+                    if ! cat "$f" &> "$repo_dir/$(basename "$f")"; then
+                        status=1
+                    fi
+                done
+            fi
+            if [ $copied -eq 0 ]; then
+                status=1
+            fi
+            ;;
+        pacman)
+            local pacman_files=(/etc/pacman.conf /etc/pacman.d/mirrorlist /etc/pacman.d/*.conf)
+            local copied=0
+            for f in "${pacman_files[@]}"; do
+                [[ -f "$f" ]] || continue
+                copied=1
+                if ! cat "$f" &> "$repo_dir/$(basename "$f")"; then
+                    status=1
+                fi
+            done
+            if [ $copied -eq 0 ]; then
+                status=1
+            fi
+            ;;
+        zypper)
+            local repo_files=(/etc/zypp/repos.d/*.repo)
+            if ((${#repo_files[@]})); then
+                for f in "${repo_files[@]}"; do
+                    if ! cat "$f" &> "$repo_dir/$(basename "$f")"; then
+                        status=1
+                    fi
+                done
+            else
+                status=1
+            fi
+            ;;
+        *)
+            status=1
+            printf "Unsupported package manager: unable to copy package sources\n" > "$repo_dir/README.txt"
+            ;;
+    esac
+
+    return $status
+}
+
 run_and_log() {
     local label="$1"
     local outfile="$2"
@@ -96,35 +198,44 @@ if command -v fwupdmgr &> /dev/null; then
 fi
 
 run_and_log "DMI decode" "$log_dir/dmi.txt" dmidecode
-run_and_log "Distribution information" "$log_dir/distro.txt" lsb_release -a
+if command -v lsb_release &> /dev/null; then
+    run_and_log "Distribution information" "$log_dir/distro.txt" lsb_release -a
+elif [ -f /etc/os-release ]; then
+    run_and_log "Distribution information" "$log_dir/distro.txt" cat /etc/os-release
+else
+    run_and_log "Distribution information" "$log_dir/distro.txt" uname -a
+fi
 run_and_log "Kernel version" "$log_dir/kernel.txt" uname -r
-run_and_log "Battery information" "$log_dir/battery.txt" upower -i /org/freedesktop/UPower/devices/battery_BAT0
-run_and_log "Installed programs" "$log_dir/installed.txt" apt list --installed
-run_and_log "Upgradeable programs" "$log_dir/upgradeable.txt" apt list --upgradeable
+if command -v upower &> /dev/null; then
+    run_and_log "Battery information" "$log_dir/battery.txt" upower -i /org/freedesktop/UPower/devices/battery_BAT0
+else
+    printf "%-35s %s" "${normal}Battery information:" ""
+    printf "%s\n" "${red}${failure_mark}${normal}"
+    printf "%s\n" "${red}  ↳ upower command not found${normal}"
+    printf "upower command not found\n" > "$log_dir/battery.txt"
+fi
+
+collect_package_information
 
 printf "%-35s %s" "${normal}Package sources:" ""
-repo_status=0
-repo_dir="$log_dir/repo"
-mkdir -p "$repo_dir"
-repo_files=(/etc/apt/sources.list.d/*.list)
-if ((${#repo_files[@]})); then
-    for f in "${repo_files[@]}"; do
-        if ! cat "$f" &> "$repo_dir/$(basename "$f")"; then
-            repo_status=1
-        fi
-    done
-else
-    if [ -f /etc/apt/sources.list ]; then
-        cat /etc/apt/sources.list &> "$repo_dir/sources.list" || repo_status=1
-    else
-        repo_status=1
-    fi
-fi
-if [ $repo_status -eq 0 ]; then
+if copy_package_sources; then
     printf "%s\n" "${green}${success_mark}${normal}"
 else
     printf "%s\n" "${red}${failure_mark}${normal}"
-    printf "%s\n" "${red}  ↳ Unable to copy APT sources${normal}"
+    case "$pkg_manager" in
+        apt)
+            printf "%s\n" "${red}  ↳ Unable to copy APT sources${normal}"
+            ;;
+        pacman)
+            printf "%s\n" "${red}  ↳ Unable to copy pacman sources${normal}"
+            ;;
+        zypper)
+            printf "%s\n" "${red}  ↳ Unable to copy zypper repositories${normal}"
+            ;;
+        *)
+            printf "%s\n" "${red}  ↳ Unsupported package manager${normal}"
+            ;;
+    esac
 fi
 
 printf "%-35s %s" "${normal}Kernel config:" ""
@@ -175,14 +286,16 @@ if pushd "$log_dir" > /dev/null; then
     if ! zip -r "$archive_path" . &> "$zip_log"; then
         archive_status=1
     fi
-    popd > /dev/null
+    if ! popd > /dev/null; then
+        archive_status=1
+    fi
 else
     archive_status=1
 fi
 
 if [ $archive_status -eq 0 ]; then
     chown "$output_user:$output_user" "$archive_path" 2> /dev/null || true
-    printf "\n${normal}Logs have been saved to ${green}~/Downloads/${archive_basename}.zip${normal}\n"
+    printf "\n%sLogs have been saved to %s~/Downloads/%s.zip%s\n" "$normal" "$green" "$archive_basename" "$normal"
 else
     printf "%sFailed to create archive. See %s for details. Logs remain in %s.%s\n" "$red" "$zip_log" "$log_dir" "$normal"
 fi
