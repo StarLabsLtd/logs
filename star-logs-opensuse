@@ -30,6 +30,52 @@ if [ "$EUID" -ne 0 ];then
 	exit
 fi
 
+CBMEM_URL="https://raw.githubusercontent.com/StarLabsLtd/firmware/refs/heads/26.06/binaries/cbmem"
+
+function get_cbmem_binary() {
+	local cbmem_path="/tmp/starlabs-cbmem"
+
+	if command -v cbmem &> /dev/null; then
+		command -v cbmem
+		return 0
+	fi
+
+	if ! command -v curl &> /dev/null; then
+		return 1
+	fi
+
+	if ! [ -x "$cbmem_path" ]; then
+		curl -fsSL "$CBMEM_URL" -o "$cbmem_path" || return 1
+		chmod +x "$cbmem_path" || return 1
+	fi
+
+	printf "%s\n" "$cbmem_path"
+}
+
+function collect_cbmem_logs() {
+	local bios_vendor cbmem_bin
+
+	bios_vendor="$(cat /sys/class/dmi/id/bios_vendor 2> /dev/null || true)"
+	if ! printf "%s" "$bios_vendor" | grep -qi "coreboot"; then
+		printf "BIOS vendor is not coreboot; skipping cbmem.\n" > "$log_dir/cbmem.txt"
+		return 0
+	fi
+
+	if ! cbmem_bin="$(get_cbmem_binary)"; then
+		printf "Unable to find or download cbmem.\n" > "$log_dir/cbmem.txt"
+		return 0
+	fi
+
+	{
+		printf "### cbmem table\n"
+		"$cbmem_bin" -l
+		printf "\n### cbmem last boot console\n"
+		"$cbmem_bin" -1
+		printf "\n### cbmem timestamps\n"
+		"$cbmem_bin" -t
+	} &> "$log_dir/cbmem.txt"
+}
+
 # Check software is up to date
 if ! [[ "$(zypper list-updates | grep 'No updates found')" ]]; then
 printf "Your software is not up to date. Updating the software may
@@ -59,6 +105,10 @@ printf "%s\n" "${green}✔"
 
 printf "%-35s %s" "${normal}Dmesg:"
 dmesg								&> "$log_dir/dmesg.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s %s" "${normal}Coreboot memory log:"
+collect_cbmem_logs
 printf "%s\n" "${green}✔"
 
 printf "%-35s %s" "${normal}Firmware information:"
