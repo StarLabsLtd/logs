@@ -5,8 +5,7 @@ Build-Depends: debhelper (>= 7)
 Standards-Version: 4.1.1
 
 Package: starlabs-diagnostics
-Depends: fwupd
+Depends: ${misc:Depends}
 Architecture: all
 Description: Used to gather logs
-
 
