@@ -182,6 +182,25 @@ function collect_nvme() {
 	} > "$log_dir/nvme.txt" 2>&1
 }
 
+function collect_usb() {
+	{
+		append_command_to_file /dev/stdout "lsusb" lsusb
+		append_command_to_file /dev/stdout "lsusb tree" lsusb -t
+		append_command_to_file /dev/stdout "lsusb verbose" lsusb -v
+		append_command_to_file /dev/stdout "usb-devices" usb-devices
+		printf "### USB sysfs\n"
+		for device in /sys/bus/usb/devices/*; do
+			[ -d "$device" ] || continue
+			printf "\n## %s\n" "$device"
+			for field in busnum devnum devpath idVendor idProduct bcdDevice manufacturer product serial version speed; do
+				[ -f "$device/$field" ] || continue
+				printf "%s: " "$field"
+				cat "$device/$field" 2> /dev/null || true
+			done
+		done
+	} > "$log_dir/usb.txt" 2>&1
+}
+
 function collect_distribution_info() {
 	: > "$log_dir/distro.txt"
 
@@ -366,6 +385,10 @@ printf "%s\n" "${green}✔"
 
 printf "%-35s" "${normal}PCI devices:"
 lspci -vvvnnnxxx						&> "$log_dir/pci.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}USB devices:"
+collect_usb
 printf "%s\n" "${green}✔"
 
 printf "%-35s" "${normal}NVMe:"
