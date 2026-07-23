@@ -126,20 +126,62 @@ function collect_pstore() {
 }
 
 function collect_intel_rapl() {
-	local rapl_files
+	local rapl_files rapl_zones
 
 	if ! [ -d /sys/class/powercap ]; then
 		printf "/sys/class/powercap is not available.\n" > "$log_dir/intel-rapl.txt"
 		return 0
 	fi
 
-	rapl_files="$(find -L /sys/class/powercap -type f -path '*intel-rapl*' 2> /dev/null | sort)"
+	rapl_zones="$(find -L /sys/class/powercap -type d -name 'intel-rapl*' 2> /dev/null \
+		| while read -r zone; do realpath "$zone" 2> /dev/null || printf "%s\n" "$zone"; done \
+		| sort -u)"
+	rapl_files="$(find -L /sys/class/powercap -type f -path '*intel-rapl*' 2> /dev/null \
+		| while read -r file; do realpath "$file" 2> /dev/null || printf "%s\n" "$file"; done \
+		| sort -u)"
 	if [ -z "$rapl_files" ]; then
 		printf "No Intel RAPL entries found.\n" > "$log_dir/intel-rapl.txt"
 		return 0
 	fi
 
 	{
+		printf "### Intel RAPL limit summary\n"
+		while read -r zone; do
+			[ -d "$zone" ] || continue
+			printf "## %s\n" "$zone"
+
+			for field in name enabled energy_uj max_energy_range_uj; do
+				[ -f "$zone/$field" ] || continue
+				local value
+				value="$(cat "$zone/$field" 2> /dev/null || true)"
+				printf "%s: %s\n" "$field" "$value"
+			done
+
+			for limit in "$zone"/constraint_*_power_limit_uw; do
+				[ -f "$limit" ] || continue
+				local constraint="${limit##*/constraint_}"
+				constraint="${constraint%_power_limit_uw}"
+
+				for field in \
+					"constraint_${constraint}_name" \
+					"constraint_${constraint}_power_limit_uw" \
+					"constraint_${constraint}_max_power_uw" \
+					"constraint_${constraint}_time_window_us"; do
+					[ -f "$zone/$field" ] || continue
+					value="$(cat "$zone/$field" 2> /dev/null || true)"
+					printf "%s: %s" "$field" "$value"
+					if [[ "$field" == *_uw ]] && [[ "$value" =~ ^[0-9]+$ ]]; then
+						awk -v value="$value" 'BEGIN { printf " (%.2f W)", value / 1000000 }'
+					elif [[ "$field" == *_us ]] && [[ "$value" =~ ^[0-9]+$ ]]; then
+						awk -v value="$value" 'BEGIN { printf " (%.2f s)", value / 1000000 }'
+					fi
+					printf "\n"
+				done
+			done
+			printf "\n"
+		done <<< "$rapl_zones"
+
+		printf "### Raw Intel RAPL attribute dump\n"
 		while read -r f; do
 			printf "### %s\n" "$f"
 			cat "$f" 2> /dev/null || true
