@@ -1,0 +1,482 @@
+#!/bin/bash
+
+function splash() {
+# clear
+cat << "BANNER"
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║                                                                             ║
+║                    ██╗      ██████╗  ██████╗ ███████╗                       ║
+║                    ██║     ██╔═══██╗██╔════╝ ██╔════╝                       ║
+║                    ██║     ██║   ██║██║  ███╗███████╗                       ║
+║                    ██║     ██║   ██║██║   ██║╚════██║                       ║
+║                    ███████╗╚██████╔╝╚██████╔╝███████║                       ║
+║                    ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝                       ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+BANNER
+printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
+printf "%-79s %s\n" "║ Gathering network logs: $(cat /sys/class/dmi/id/product_name 2> /dev/null)" "║ "
+printf "%-79s %s\n" "║ Script version: 3.1.0" "║ "
+printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
+}
+
+splash "Star Labs Network Diagnostics"
+green=$(tput setaf 2 2> /dev/null || true)
+yellow=$(tput setaf 3 2> /dev/null || true)
+red=$(tput setaf 1 2> /dev/null || true)
+bold=$(tput bold 2> /dev/null || true)
+normal=$(tput sgr0 2> /dev/null || true)
+
+if [ "$EUID" -ne 0 ];then
+	printf "\nStar-Network-Logs requires root privileges. Please type in:\n\n"
+	printf "%s\n\n" "${green}sudo star-network-logs"
+	exit 1
+fi
+
+JOURNAL_SINCE="${JOURNAL_SINCE:-3 days ago}"
+JOURNAL_UNTIL="${JOURNAL_UNTIL:-now}"
+
+function command_to_file() {
+	local output_path="$1"
+	shift
+
+	if command -v "$1" &> /dev/null; then
+		"$@" &> "$output_path" || true
+	else
+		printf "%s is not installed.\n" "$1" > "$output_path"
+	fi
+}
+
+function append_command_to_file() {
+	local output_path="$1"
+	local title="$2"
+	shift 2
+
+	{
+		printf "### %s\n" "$title"
+		if command -v "$1" &> /dev/null; then
+			"$@" 2>&1 || true
+		else
+			printf "%s is not installed.\n" "$1"
+		fi
+		printf "\n"
+	} >> "$output_path"
+}
+
+function collect_distribution_info() {
+	: > "$log_dir/distro.txt"
+
+	if [ -f /etc/os-release ]; then
+		{
+			printf "### /etc/os-release\n"
+			cat /etc/os-release
+			printf "\n"
+		} >> "$log_dir/distro.txt"
+	fi
+
+	append_command_to_file "$log_dir/distro.txt" "lsb_release" lsb_release -a
+	uname -a &> "$log_dir/kernel.txt" || true
+}
+
+function collect_network_hardware() {
+	{
+		printf "### PCI network devices\n"
+		if command -v lspci &> /dev/null; then
+			lspci -nnk | grep -A4 -Ei 'network|ethernet' || true
+		else
+			printf "lspci is not installed.\n"
+		fi
+		printf "\n### USB network devices\n"
+		if command -v lsusb &> /dev/null; then
+			lsusb | grep -Ei 'network|ether|wireless|wifi|wi-fi|802\.11' || true
+		else
+			printf "lsusb is not installed.\n"
+		fi
+		printf "\n### Loaded network modules\n"
+		lsmod | grep -Ei 'iwl|wifi|wlan|80211|ether|e1000|igc|igb|r8169|r8152|atlantic|alx|tg3|bnx|sky2' || true
+	} > "$log_dir/network-hardware.txt" 2>&1
+}
+
+function collect_networkmanager() {
+	: > "$log_dir/networkmanager.txt"
+	append_command_to_file "$log_dir/networkmanager.txt" "General status" nmcli general status
+	append_command_to_file "$log_dir/networkmanager.txt" "Device status" nmcli device status
+	append_command_to_file "$log_dir/networkmanager.txt" "Device details" nmcli -f all device show
+	append_command_to_file "$log_dir/networkmanager.txt" "Connections" nmcli -f NAME,UUID,TYPE,DEVICE,AUTOCONNECT,IP4.METHOD,IP6.METHOD connection show
+	append_command_to_file "$log_dir/networkmanager.txt" "NetworkManager service" systemctl status NetworkManager --no-pager
+}
+
+function collect_wifi() {
+	: > "$log_dir/wifi.txt"
+	append_command_to_file "$log_dir/wifi.txt" "rfkill" rfkill list all
+	append_command_to_file "$log_dir/wifi.txt" "Wireless interfaces" iw dev
+	append_command_to_file "$log_dir/wifi.txt" "Regulatory domain" iw reg get
+	append_command_to_file "$log_dir/wifi.txt" "Visible Wi-Fi networks" nmcli -f IN-USE,SSID,BSSID,MODE,CHAN,RATE,SIGNAL,SECURITY device wifi list
+}
+
+function collect_addressing() {
+	: > "$log_dir/addressing.txt"
+	append_command_to_file "$log_dir/addressing.txt" "IP addresses" ip -details address show
+	append_command_to_file "$log_dir/addressing.txt" "IP links" ip -details link show
+	append_command_to_file "$log_dir/addressing.txt" "Routing tables" ip route show table all
+	append_command_to_file "$log_dir/addressing.txt" "Policy routing" ip rule show
+	append_command_to_file "$log_dir/addressing.txt" "Neighbours" ip neighbour show
+}
+
+function collect_dns() {
+	: > "$log_dir/dns.txt"
+	append_command_to_file "$log_dir/dns.txt" "systemd-resolved status" resolvectl status
+	append_command_to_file "$log_dir/dns.txt" "NetworkManager DNS" nmcli general logging
+	if [ -e /etc/resolv.conf ]; then
+		{
+			printf "### /etc/resolv.conf\n"
+			ls -l /etc/resolv.conf
+			cat /etc/resolv.conf
+			printf "\n"
+		} >> "$log_dir/dns.txt" 2>&1
+	fi
+}
+
+function collect_dhcp_leases() {
+	mkdir -p "$log_dir/dhcp-leases"
+	local found=0 file safe_name
+	for file in /var/lib/NetworkManager/*.lease /var/lib/NetworkManager/*lease* /var/lib/dhcp/*.leases; do
+		[ -f "$file" ] || continue
+		safe_name="${file#/}"
+		safe_name="${safe_name//\//__}"
+		cat "$file" > "$log_dir/dhcp-leases/$safe_name" 2> /dev/null || true
+		found=1
+	done
+	if [ "$found" -eq 0 ]; then
+		printf "No DHCP lease files found.\n" > "$log_dir/dhcp-leases/none.txt"
+	fi
+}
+
+function collect_ethernet() {
+	: > "$log_dir/ethernet.txt"
+	local iface
+	for iface in /sys/class/net/*; do
+		iface="$(basename "$iface")"
+		[ "$iface" = "lo" ] && continue
+		{
+			printf "### Interface: %s\n" "$iface"
+			if command -v ethtool &> /dev/null; then
+				ethtool "$iface" 2>&1 || true
+				printf "\n### Driver information: %s\n" "$iface"
+				ethtool -i "$iface" 2>&1 || true
+			else
+				printf "ethtool is not installed.\n"
+			fi
+			printf "\n"
+		} >> "$log_dir/ethernet.txt"
+	done
+}
+
+function collect_connectivity() {
+	: > "$log_dir/connectivity.txt"
+	local gateway
+	gateway="$(ip route show default 2> /dev/null | awk 'NR==1 {print $3}')"
+	{
+		printf "### Default route\n"
+		ip route show default 2>&1 || true
+		printf "\n"
+	} >> "$log_dir/connectivity.txt"
+
+	if [ -n "$gateway" ]; then
+		append_command_to_file "$log_dir/connectivity.txt" "Ping default gateway ($gateway)" ping -c 3 -W 2 "$gateway"
+	else
+		printf "### Ping default gateway\nNo default gateway found.\n\n" >> "$log_dir/connectivity.txt"
+	fi
+	append_command_to_file "$log_dir/connectivity.txt" "Ping public IPv4" ping -c 3 -W 2 1.1.1.1
+	append_command_to_file "$log_dir/connectivity.txt" "DNS lookup" getent ahosts example.com
+	append_command_to_file "$log_dir/connectivity.txt" "Resolved DNS query" resolvectl query example.com
+	append_command_to_file "$log_dir/connectivity.txt" "HTTPS request" curl -I --max-time 10 https://example.com
+}
+
+
+function get_system_versions() {
+	local wifi_iface
+
+	kernel_running="$(uname -r 2> /dev/null || printf 'Unknown')"
+	kernel_details="$(uname -srvmo 2> /dev/null || printf 'Unknown')"
+
+	coreboot_version="$(cat /sys/class/dmi/id/bios_version 2> /dev/null || true)"
+	[ -n "$coreboot_version" ] || coreboot_version="$(dmidecode -s bios-version 2> /dev/null | head -n 1 || true)"
+	[ -n "$coreboot_version" ] || coreboot_version="Unknown"
+	coreboot_date="$(cat /sys/class/dmi/id/bios_date 2> /dev/null || true)"
+	[ -n "$coreboot_date" ] || coreboot_date="$(dmidecode -s bios-release-date 2> /dev/null | head -n 1 || true)"
+	[ -n "$coreboot_date" ] || coreboot_date="Unknown"
+
+	wifi_iface="$(iw dev 2> /dev/null | awk '$1 == "Interface" {print $2; exit}')"
+	if [ -z "$wifi_iface" ]; then
+		wifi_iface="$(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' 2> /dev/null | grep -E '^(wl|wlan)' | head -n 1 || true)"
+	fi
+
+	if [ -n "$wifi_iface" ] && command -v ethtool &> /dev/null; then
+		wifi_driver="$(ethtool -i "$wifi_iface" 2> /dev/null | awk -F ': ' '$1 == "driver" {print $2; exit}')"
+		wifi_fw="$(ethtool -i "$wifi_iface" 2> /dev/null | awk -F ': ' '$1 == "firmware-version" {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+	fi
+
+	[ -n "$wifi_driver" ] || wifi_driver="$(basename "$(readlink -f "/sys/class/net/$wifi_iface/device/driver" 2> /dev/null)" 2> /dev/null || true)"
+	[ -n "$wifi_driver" ] || wifi_driver="Unknown"
+
+	if [ -z "$wifi_fw" ] || [ "$wifi_fw" = "N/A" ]; then
+		wifi_fw="$(dmesg 2> /dev/null | sed -nE 's/.*loaded firmware version[[:space:]]+([^[:space:]]+).*/\1/p' | tail -n 1)"
+	fi
+	if [ -z "$wifi_fw" ]; then
+		wifi_fw="$(journalctl -k -b --no-pager 2> /dev/null | sed -nE 's/.*loaded firmware version[[:space:]]+([^[:space:]]+).*/\1/p' | tail -n 1)"
+	fi
+	[ -n "$wifi_fw" ] || wifi_fw="Unknown"
+	wifi_interface="${wifi_iface:-Not detected}"
+}
+
+function analyse_network() {
+	local nm_active=0 link_up=0 has_ipv4=0 has_route=0 gateway_ok=0 internet_ok=0 dns_ok=0
+	local dhcp_failure=0 auth_failure=0 firmware_failure=0 rfkill_blocked=0 gateway
+	local confidence="Medium"
+	local primary="No obvious fault detected"
+	local actions=""
+
+	get_system_versions
+
+	systemctl is-active --quiet NetworkManager 2> /dev/null && nm_active=1
+	ip -o link show 2> /dev/null | grep -Eq 'LOWER_UP|state UP' && link_up=1
+	ip -4 -o address show scope global 2> /dev/null | grep -q . && has_ipv4=1
+	gateway="$(ip route show default 2> /dev/null | awk 'NR==1 {print $3}')"
+	[ -n "$gateway" ] && has_route=1
+	[ -n "$gateway" ] && ping -c 1 -W 2 "$gateway" &> /dev/null && gateway_ok=1
+	ping -c 1 -W 2 1.1.1.1 &> /dev/null && internet_ok=1
+	getent ahosts example.com &> /dev/null && dns_ok=1
+	grep -Eqi 'dhcp.*(timeout|timed out|failed|no lease)|ip-config-unavailable|lease.*failed' "$log_dir/networkmanager-journal.txt" "$log_dir/dhcp-journal.txt" 2> /dev/null && dhcp_failure=1
+	grep -Eqi '802\.1x|eap.*fail|authentication.*fail|no secrets|supplicant.*fail|4-way handshake.*fail' "$log_dir/networkmanager-journal.txt" "$log_dir/authentication-journal.txt" 2> /dev/null && auth_failure=1
+	grep -Eqi 'firmware.*(failed|error|missing)|iwlwifi.*(failed|error)' "$log_dir/kernel-network.txt" "$log_dir/dmesg-network.txt" 2> /dev/null && firmware_failure=1
+	grep -Eqi 'Soft blocked: yes|Hard blocked: yes' "$log_dir/wifi.txt" 2> /dev/null && rfkill_blocked=1
+
+	if [ "$nm_active" -eq 0 ]; then
+		primary="NetworkManager is not running"
+		confidence="High"
+	elif [ "$rfkill_blocked" -eq 1 ]; then
+		primary="The wireless radio is blocked"
+		confidence="High"
+	elif [ "$firmware_failure" -eq 1 ]; then
+		primary="A network driver or firmware fault is indicated"
+		confidence="High"
+	elif [ "$auth_failure" -eq 1 ]; then
+		primary="Network authentication or 802.1X is failing"
+		confidence="High"
+	elif [ "$has_ipv4" -eq 0 ] && [ "$dhcp_failure" -eq 1 ]; then
+		primary="DHCP is not completing"
+		confidence="High"
+	elif [ "$link_up" -eq 1 ] && [ "$has_ipv4" -eq 0 ]; then
+		primary="A link is present, but no IPv4 address was assigned"
+		confidence="Medium"
+	elif [ "$has_ipv4" -eq 1 ] && [ "$has_route" -eq 0 ]; then
+		primary="An IPv4 address exists, but no default route was supplied"
+		confidence="High"
+	elif [ "$has_route" -eq 1 ] && [ "$gateway_ok" -eq 0 ]; then
+		primary="The configured gateway is unreachable"
+		confidence="Medium"
+	elif [ "$gateway_ok" -eq 1 ] && [ "$internet_ok" -eq 0 ]; then
+		primary="The local network works, but upstream internet access fails"
+		confidence="High"
+	elif [ "$internet_ok" -eq 1 ] && [ "$dns_ok" -eq 0 ]; then
+		primary="Internet access works, but DNS resolution fails"
+		confidence="High"
+	elif [ "$internet_ok" -eq 1 ] && [ "$dns_ok" -eq 1 ]; then
+		primary="No active network fault was detected"
+		confidence="High"
+	fi
+
+	case "$primary" in
+		"NetworkManager is not running") actions="- Run: sudo systemctl enable --now NetworkManager\n- Reconnect, then run this tool again.\n" ;;
+		"The wireless radio is blocked") actions="- Run: sudo rfkill unblock all\n- Check any hardware wireless switch or firmware setting, then reconnect.\n" ;;
+		"A network driver or firmware fault is indicated") actions="- Update the system and reinstall linux-firmware.\n- Reboot and run this tool again; inspect kernel-network.txt if the fault remains.\n" ;;
+		"Network authentication or 802.1X is failing") actions="- Verify the EAP method, credentials and CA/client certificates.\n- Ask the network administrator whether wired or wireless 802.1X/NAC registration is required.\n" ;;
+		"DHCP is not completing"|"A link is present, but no IPv4 address was assigned") actions="- Check the customer DHCP scope, VLAN, MAC allow-list, NAC and 802.1X policy.\n- Test the laptop on a phone hotspot.\n- Test another unregistered device on the same customer port or SSID.\n" ;;
+		"An IPv4 address exists, but no default route was supplied") actions="- Check the DHCP router option and the NetworkManager connection profile.\n- Compare the address, prefix and gateway with a working device.\n" ;;
+		"The configured gateway is unreachable") actions="- Check VLAN assignment, switch-port security and client isolation.\n- Confirm the gateway is reachable from another device on the same network.\n" ;;
+		"The local network works, but upstream internet access fails") actions="- Check the customer firewall, captive portal, proxy and upstream routing.\n- Open a browser to complete any captive-portal sign-in.\n" ;;
+		"Internet access works, but DNS resolution fails") actions="- Check DHCP DNS options and systemd-resolved.\n- Review /etc/resolv.conf and compare DNS servers with a working device.\n" ;;
+		"No active network fault was detected") actions="- The connection is currently working.\n- Reproduce the fault on the affected network and run this tool again immediately.\n" ;;
+		*) actions="- Reproduce the fault while connected to the affected network.\n- Run this tool again and send the resulting archive to support.\n" ;;
+	esac
+
+	diagnostic_issue="$primary"
+	diagnostic_confidence="$confidence"
+	diagnostic_actions="$actions"
+
+	{
+		cat <<EOF
+Star Labs Network Diagnostic Summary
+====================================
+EOF
+		printf "Generated: %s\n" "$(date --iso-8601=seconds 2> /dev/null || date)"
+		printf "Journal window: %s to %s\n\n" "$JOURNAL_SINCE" "$JOURNAL_UNTIL"
+		printf "System versions:\n"
+		printf "%s\n" "- Coreboot/BIOS firmware: $coreboot_version"
+		printf "%s\n" "- Coreboot/BIOS release date: $coreboot_date"
+		printf "%s\n" "- Running kernel: $kernel_running"
+		printf "%s\n" "- Kernel details: $kernel_details"
+		printf "%s\n" "- Wi-Fi interface: $wifi_interface"
+		printf "%s\n" "- Wi-Fi driver: $wifi_driver"
+		printf "%s\n\n" "- Wi-Fi firmware: $wifi_fw"
+		printf "Likely issue: %s\n" "$primary"
+		printf "Confidence: %s\n\n" "$confidence"
+		cat <<EOF
+Observed state:
+- NetworkManager running: $([ "$nm_active" -eq 1 ] && echo yes || echo no)
+- Active network link: $([ "$link_up" -eq 1 ] && echo yes || echo no)
+- Global IPv4 address: $([ "$has_ipv4" -eq 1 ] && echo yes || echo no)
+- Default route: $([ "$has_route" -eq 1 ] && echo yes || echo no)
+- Gateway reachable: $([ "$gateway_ok" -eq 1 ] && echo yes || echo no)
+- Public IPv4 reachable: $([ "$internet_ok" -eq 1 ] && echo yes || echo no)
+- DNS resolution working: $([ "$dns_ok" -eq 1 ] && echo yes || echo no)
+
+EOF
+		printf "Recommended action:\n"
+		printf "%b" "$actions"
+		printf "\nPrivacy note:\n"
+		printf "This archive can contain SSIDs, MAC addresses, IP addresses, hostnames and account names. Review it before sharing externally.\n"
+	} > "$log_dir/support-summary.txt"
+}
+
+function display_recommendations() {
+	local issue_colour="$yellow"
+
+	case "$diagnostic_confidence" in
+		High) issue_colour="$red" ;;
+		*) issue_colour="$yellow" ;;
+	esac
+
+	if [ "$diagnostic_issue" = "No active network fault was detected" ]; then
+		issue_colour="$green"
+	fi
+
+	printf "\n%sNetwork assessment%s\n" "$bold" "$normal"
+	printf "%-18s %s%s%s\n" "Likely issue:" "$issue_colour" "$diagnostic_issue" "$normal"
+	printf "%-18s %s\n" "Confidence:" "$diagnostic_confidence"
+	printf "\n%sSystem details%s\n" "$bold" "$normal"
+	printf "%-22s %s\n" "Coreboot firmware:" "$coreboot_version"
+	printf "%-22s %s\n" "Wi-Fi firmware:" "$wifi_fw"
+	printf "%-22s %s\n" "Wi-Fi driver:" "$wifi_driver"
+	printf "%-22s %s\n" "Running kernel:" "$kernel_running"
+	printf "\n%sRecommended actions%s\n" "$bold" "$normal"
+	printf "%b" "$diagnostic_actions"
+	printf "\n%sDetailed evidence is included in support-summary.txt.%s\n" "$normal" "$normal"
+}
+
+function get_output_dir() {
+	local owner="${SUDO_USER:-$(id -un)}"
+	local owner_home output_dir
+
+	owner_home="$(getent passwd "$owner" | cut -d ':' -f 6)"
+	if [ -z "$owner_home" ]; then
+		owner_home="$HOME"
+	fi
+
+	if [ "$owner" != "root" ] && command -v runuser &> /dev/null; then
+		output_dir="$(runuser -u "$owner" -- xdg-user-dir DOWNLOAD 2> /dev/null || true)"
+	elif command -v xdg-user-dir &> /dev/null; then
+		output_dir="$(xdg-user-dir DOWNLOAD 2> /dev/null || true)"
+	fi
+
+	if [ -z "$output_dir" ] || ! [ -d "$output_dir" ]; then
+		output_dir="$owner_home"
+	fi
+
+	printf "%s\n" "$output_dir"
+}
+
+function create_archive() {
+	local archive_base output_dir
+
+	archive_base="$(basename "$log_dir")"
+	output_dir="$(get_output_dir)"
+
+	if command -v zip &> /dev/null; then
+		archive_path="$output_dir/$archive_base.zip"
+		(cd "$log_dir" && zip -r "$archive_path" .) &> /dev/null
+	else
+		archive_path="$output_dir/$archive_base.tar.gz"
+		tar -czf "$archive_path" -C "$log_dir" . &> /dev/null
+	fi
+
+	if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+		chown "$SUDO_USER:" "$archive_path" 2> /dev/null || true
+	fi
+}
+
+product_name="$(cat /sys/class/dmi/id/product_name 2> /dev/null || printf Unknown)"
+product_name="${product_name//\//_}"
+log_dir="/tmp/${product_name}_network_$(date '+%Y-%m-%d_%H-%M-%S')"
+mkdir -p "$log_dir"
+
+printf "%-35s" "${normal}Journalctl:"
+journalctl -r --since "$JOURNAL_SINCE" --until "$JOURNAL_UNTIL" &> "$log_dir/journalctl.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}NetworkManager log:"
+journalctl -u NetworkManager --since "$JOURNAL_SINCE" --until "$JOURNAL_UNTIL" --no-pager &> "$log_dir/networkmanager-journal.txt"
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}DHCP log:"
+journalctl --since "$JOURNAL_SINCE" --until "$JOURNAL_UNTIL" --no-pager | grep -Ei 'dhcp|lease|ip-config-unavailable|no address|timed out' &> "$log_dir/dhcp-journal.txt" || true
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Authentication log:"
+journalctl --since "$JOURNAL_SINCE" --until "$JOURNAL_UNTIL" --no-pager | grep -Ei 'wpa_supplicant|802\.1x|eap|authentication|association|4-way handshake' &> "$log_dir/authentication-journal.txt" || true
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Kernel network log:"
+journalctl -k --since "$JOURNAL_SINCE" --until "$JOURNAL_UNTIL" --no-pager | grep -Ei 'iwl|wifi|wlan|ether|firmware|link|network|carrier|802\.1x|eap' &> "$log_dir/kernel-network.txt" || true
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Dmesg:"
+dmesg &> "$log_dir/dmesg.txt"
+dmesg | grep -Ei 'iwl|wifi|wlan|ether|firmware|link|network|carrier' &> "$log_dir/dmesg-network.txt" || true
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Distribution information:"
+collect_distribution_info
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Network hardware:"
+collect_network_hardware
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}NetworkManager status:"
+collect_networkmanager
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Wi-Fi information:"
+collect_wifi
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Addressing and routes:"
+collect_addressing
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}DNS information:"
+collect_dns
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}DHCP leases:"
+collect_dhcp_leases
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Ethernet information:"
+collect_ethernet
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Connectivity tests:"
+collect_connectivity
+printf "%s\n" "${green}✔"
+
+printf "%-35s" "${normal}Support summary:"
+analyse_network
+printf "%s\n" "${green}✔"
+
+create_archive
+display_recommendations
+printf "\n${normal}Logs have been saved to ${green}%s${normal}\n" "$archive_path"
+printf "${normal}Please send the archive to Star Labs Support at ${green}support@starlabs.systems${normal}\n"
