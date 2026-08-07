@@ -6,23 +6,24 @@ cat << "BANNER"
 
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                                                                             ║
-║                    ██╗      ██████╗  ██████╗ ███████╗                       ║
-║                    ██║     ██╔═══██╗██╔════╝ ██╔════╝                       ║
-║                    ██║     ██║   ██║██║  ███╗███████╗                       ║
-║                    ██║     ██║   ██║██║   ██║╚════██║                       ║
-║                    ███████╗╚██████╔╝╚██████╔╝███████║                       ║
-║                    ╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝                       ║
+║                        ██╗    ██╗██╗      ███████╗██╗                       ║
+║                        ██║    ██║██║      ██╔════╝██║                       ║
+║                        ██║ █╗ ██║██║█████╗█████╗  ██║                       ║
+║                        ██║███╗██║██║╚════╝██╔══╝  ██║                       ║
+║                        ╚███╔███╔╝██║      ██║     ██║                       ║
+║                         ╚══╝╚══╝ ╚═╝      ╚═╝     ╚═╝                       ║
 ╚═════════════════════════════════════════════════════════════════════════════╝
 BANNER
 printf "╔═════════════════════════════════════════════════════════════════════════════╗\n"
 printf "%-79s %s\n" "║ Gathering network logs: $(cat /sys/class/dmi/id/product_name 2> /dev/null)" "║ "
-printf "%-79s %s\n" "║ Script version: 3.1.0" "║ "
+printf "%-79s %s\n" "║ Script version: 3.5.0" "║ "
 printf "╚═════════════════════════════════════════════════════════════════════════════╝\n\n"
 }
 
 splash "Star Labs Network Diagnostics"
 green=$(tput setaf 2 2> /dev/null || true)
 yellow=$(tput setaf 3 2> /dev/null || true)
+amber=$(tput setaf 3 2> /dev/null || true)
 red=$(tput setaf 1 2> /dev/null || true)
 bold=$(tput bold 2> /dev/null || true)
 normal=$(tput sgr0 2> /dev/null || true)
@@ -232,9 +233,11 @@ function get_system_versions() {
 
 function analyse_network() {
 	local nm_active=0 link_up=0 has_ipv4=0 has_route=0 gateway_ok=0 internet_ok=0 dns_ok=0
-	local dhcp_failure=0 auth_failure=0 firmware_failure=0 rfkill_blocked=0 gateway
+	local dhcp_failure=0 auth_failure=0 firmware_failure=0 rfkill_blocked=0 hardware_failure=0 gateway
 	local confidence="Medium"
 	local primary="No obvious fault detected"
+	local fault_type="Undetermined"
+	local fault_reason="Insufficient evidence to classify the fault"
 	local actions=""
 
 	get_system_versions
@@ -251,8 +254,12 @@ function analyse_network() {
 	grep -Eqi '802\.1x|eap.*fail|authentication.*fail|no secrets|supplicant.*fail|4-way handshake.*fail' "$log_dir/networkmanager-journal.txt" "$log_dir/authentication-journal.txt" 2> /dev/null && auth_failure=1
 	grep -Eqi 'firmware.*(failed|error|missing)|iwlwifi.*(failed|error)' "$log_dir/kernel-network.txt" "$log_dir/dmesg-network.txt" 2> /dev/null && firmware_failure=1
 	grep -Eqi 'Soft blocked: yes|Hard blocked: yes' "$log_dir/wifi.txt" 2> /dev/null && rfkill_blocked=1
+	grep -Eqi 'hardware error|hardware restart|microcode.*(error|failed)|fatal.*(wifi|wlan|ether|network)|pcie.*(fatal|uncorrected)|aer:.*uncorrected|adapter.*(not found|failed)|device.*(disappeared|not ready)' "$log_dir/kernel-network.txt" "$log_dir/dmesg-network.txt" 2> /dev/null && hardware_failure=1
 
-	if [ "$nm_active" -eq 0 ]; then
+	if [ "$hardware_failure" -eq 1 ]; then
+		primary="A network hardware fault is indicated"
+		confidence="High"
+	elif [ "$nm_active" -eq 0 ]; then
 		primary="NetworkManager is not running"
 		confidence="High"
 	elif [ "$rfkill_blocked" -eq 1 ]; then
@@ -288,6 +295,26 @@ function analyse_network() {
 	fi
 
 	case "$primary" in
+		"A network hardware fault is indicated")
+			fault_type="Hardware"
+			fault_reason="Kernel evidence indicates a hardware, PCIe or adapter-level failure"
+			;;
+		"NetworkManager is not running"|"The wireless radio is blocked"|"A network driver or firmware fault is indicated"|"Network authentication or 802.1X is failing"|"Internet access works, but DNS resolution fails")
+			fault_type="Software / configuration"
+			fault_reason="The detected condition is most consistent with configuration, authentication, driver, firmware or operating-system software"
+			;;
+		"DHCP is not completing"|"A link is present, but no IPv4 address was assigned"|"An IPv4 address exists, but no default route was supplied"|"The configured gateway is unreachable"|"The local network works, but upstream internet access fails")
+			fault_type="Network / configuration"
+			fault_reason="The adapter is responding, but addressing, routing or the external network is not completing normally"
+			;;
+		"No active network fault was detected")
+			fault_type="No fault detected"
+			fault_reason="Current connectivity tests completed successfully"
+			;;
+	esac
+
+	case "$primary" in
+		"A network hardware fault is indicated") actions="- Power the system off fully, then retest the network adapter.\n- Check that the Wi-Fi card/antenna or Ethernet hardware is detected and seated correctly where serviceable.\n- If the hardware-level errors repeat, contact Star Labs Support with this archive.\n" ;;
 		"NetworkManager is not running") actions="- Run: sudo systemctl enable --now NetworkManager\n- Reconnect, then run this tool again.\n" ;;
 		"The wireless radio is blocked") actions="- Run: sudo rfkill unblock all\n- Check any hardware wireless switch or firmware setting, then reconnect.\n" ;;
 		"A network driver or firmware fault is indicated") actions="- Update the system and reinstall linux-firmware.\n- Reboot and run this tool again; inspect kernel-network.txt if the fault remains.\n" ;;
@@ -303,6 +330,8 @@ function analyse_network() {
 
 	diagnostic_issue="$primary"
 	diagnostic_confidence="$confidence"
+	diagnostic_fault_type="$fault_type"
+	diagnostic_fault_reason="$fault_reason"
 	diagnostic_actions="$actions"
 
 	{
@@ -321,6 +350,8 @@ EOF
 		printf "%s\n" "- Wi-Fi driver: $wifi_driver"
 		printf "%s\n\n" "- Wi-Fi firmware: $wifi_fw"
 		printf "Likely issue: %s\n" "$primary"
+		printf "Fault classification: %s\n" "$fault_type"
+		printf "Classification reason: %s\n" "$fault_reason"
 		printf "Confidence: %s\n\n" "$confidence"
 		cat <<EOF
 Observed state:
@@ -342,19 +373,22 @@ EOF
 
 function display_recommendations() {
 	local issue_colour="$yellow"
+	local type_colour="$yellow"
 
-	case "$diagnostic_confidence" in
-		High) issue_colour="$red" ;;
-		*) issue_colour="$yellow" ;;
+	case "$diagnostic_fault_type" in
+		"Hardware") type_colour="$red" ;;
+		"Software"|"Software / configuration") type_colour="$amber" ;;
+		"Network / configuration") type_colour="$yellow" ;;
+		"No fault detected") type_colour="$green" ;;
 	esac
 
-	if [ "$diagnostic_issue" = "No active network fault was detected" ]; then
-		issue_colour="$green"
-	fi
+	issue_colour="$type_colour"
 
 	printf "\n%sNetwork assessment%s\n" "$bold" "$normal"
 	printf "%-18s %s%s%s\n" "Likely issue:" "$issue_colour" "$diagnostic_issue" "$normal"
+	printf "%-18s %s%s%s\n" "Fault type:" "$type_colour" "$diagnostic_fault_type" "$normal"
 	printf "%-18s %s\n" "Confidence:" "$diagnostic_confidence"
+	printf "%-18s %s\n" "Reason:" "$diagnostic_fault_reason"
 	printf "\n%sSystem details%s\n" "$bold" "$normal"
 	printf "%-22s %s\n" "Coreboot firmware:" "$coreboot_version"
 	printf "%-22s %s\n" "Wi-Fi firmware:" "$wifi_fw"
