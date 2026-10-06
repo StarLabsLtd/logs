@@ -56,3 +56,5 @@ context.modules = [
     }
 ]
 EOF
+## Restart of Audio Services ##
+systemctl --user restart pipewire pipewire-pulse wireplumber
